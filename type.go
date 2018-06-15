@@ -9,8 +9,11 @@ import (
 	"encoding/xml"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
+
+type RSSUpdateNotifier func(newItems []RSSItem)
 
 // RSS is a Web content syndication format.
 //
@@ -37,7 +40,8 @@ type RSS struct {
 	source       string
 	lastUpdateAt time.Time
 
-	OnRSSUpdate func(newItems []RSSItem)
+	mu                 sync.Mutex
+	rssUpdateNotifiers []RSSUpdateNotifier
 }
 
 func (rss RSS) String() string {

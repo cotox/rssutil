@@ -14,7 +14,9 @@ import (
 	"time"
 )
 
-var DefaultTTL = 20 * time.Minute
+const DefaultTTL = 20 * time.Minute
+
+var stopServe = make(chan struct{})
 
 // Feed creates RSS implementation from binary and return.
 func Feed(b []byte) (rss *RSS, err error) {
@@ -27,6 +29,7 @@ func Feed(b []byte) (rss *RSS, err error) {
 		return nil, err
 	}
 
+	// Trim elements in string type.
 	const cutset = " \t\n"
 	rss.Channel.Title = strings.Trim(rss.Channel.Title, cutset)
 	rss.Channel.Description = strings.Trim(rss.Channel.Description, cutset)
@@ -38,6 +41,7 @@ func Feed(b []byte) (rss *RSS, err error) {
 	}
 
 	rss.origin = b
+
 	rss.lastUpdateAt = time.Now()
 
 	return rss, nil
@@ -58,6 +62,7 @@ func FeedFromFile(filename string) (rss *RSS, err error) {
 	}
 
 	rss.source = filename
+
 	return rss, nil
 }
 
@@ -85,9 +90,11 @@ func FeedFromURL(url string) (rss *RSS, err error) {
 	}
 
 	rss.source = url
+
 	return rss, nil
 }
 
+// Update updates RSS content and returns the newer RSSItem list.
 func (rss *RSS) Update() (newItems []RSSItem, err error) {
 	logTrace("rss.Update()")
 
@@ -97,14 +104,25 @@ func (rss *RSS) Update() (newItems []RSSItem, err error) {
 		return nil, fmt.Errorf("empty rss.source")
 	}
 
+	var rss2 *RSS
 	if rss.source[:4] == "http" {
-		rss, err = FeedFromURL(rss.source)
+		rss2, err = FeedFromURL(rss.source)
+		if err != nil {
+			logErr(err)
+			return nil, err
+		}
 	} else {
-		rss, err = FeedFromFile(rss.source)
+		rss2, err = FeedFromFile(rss.source)
+		if err != nil {
+			logErr(err)
+			return nil, err
+		}
 	}
-	if err != nil {
-		logErr(err)
-		return nil, err
+	rss.Channel.Items = rss2.Channel.Items
+	rss.lastUpdateAt = time.Now()
+
+	if latestItem == nil {
+		return nil, nil
 	}
 
 	items := rss.Channel.Items
@@ -117,35 +135,96 @@ func (rss *RSS) Update() (newItems []RSSItem, err error) {
 	return newItems, nil
 }
 
-func (rss RSS) Serve(forceTTL int) {
-	var ttl time.Duration
-	if rss.Channel.TTL != 0 {
-		ttl = time.Duration(rss.Channel.TTL) * time.Minute
-	} else {
-		ttl = DefaultTTL
-	}
-	if forceTTL != 0 {
-		ttl = time.Duration(forceTTL) * time.Second
+// Serve updated RSS content in background automatically.
+// And calls registered RSSUpdateNotifiers when new RSSItems come.
+//
+// The RSS content will update every ttl minutes. If ttl is 0, it tries
+// to use TTL specified in RSSChannel, then DefaultTTL if RSSChannel.TTL
+// is not specified.
+func (rss *RSS) Serve(ttl time.Duration) error {
+	if ttl == 0 {
+		if rss.Channel.TTL > 0 {
+			ttl = time.Duration(rss.Channel.TTL) * time.Minute
+		} else {
+			ttl = DefaultTTL
+		}
 	}
 
-	time.Sleep(ttl - time.Now().Sub(rss.lastUpdateAt))
+	// time.Sleep(ttl - time.Now().Sub(rss.lastUpdateAt))
+	ticker := time.NewTicker(ttl)
+	defer ticker.Stop()
 
+serveLoop:
 	for {
-		newItems, err := rss.Update()
-		if err != nil {
-			logErr(err)
+		select {
+		case <-stopServe:
+			break serveLoop
+		case <-ticker.C:
+			newItems, err := rss.Update()
+			if err != nil {
+				logErr(err)
+				return err
+			}
+			if newItems != nil {
+				for _, f := range rss.rssUpdateNotifiers {
+					go f(newItems)
+				}
+			}
 		}
-
-		if newItems != nil && rss.OnRSSUpdate != nil {
-			rss.OnRSSUpdate(newItems)
-		}
-
-		time.Sleep(ttl)
 	}
+
+	return nil
 }
 
-func (rss RSS) latestItem() (latestItem *RSSItem) {
+// Stop to serve.
+func (rss *RSS) Stop() { stopServe <- struct{}{} }
+
+func (rss *RSS) RegisterRSSUpdateNotifier(f func([]RSSItem)) {
+	rss.mu.Lock()
+	rss.rssUpdateNotifiers = append(rss.rssUpdateNotifiers, f)
+	rss.mu.Unlock()
+}
+
+// Serve create an RSS implementation and keep auto update in background.
+//
+// Argument source specifies the URL of RSS.
+// The RSS content will update every ttl minutes. If ttl is 0, it tries
+// to use TTL specified in RSSChannel, then DefaultTTL if RSSChannel.TTL
+// is not specified.
+func Serve(source string, f RSSUpdateNotifier, ttl time.Duration) error {
+	var rss *RSS
+	var err error
+	if source[:4] == "http" {
+		rss, err = FeedFromURL(source)
+		if err != nil {
+			logDebugln("ERROR:", err)
+			return err
+		}
+	} else {
+		rss, err = FeedFromFile(source)
+		if err != nil {
+			logDebugln("ERROR", err)
+			return err
+		}
+	}
+
+	rss.RegisterRSSUpdateNotifier(f)
+
+	if rss.Channel.Items != nil {
+		go f(rss.Channel.Items)
+	}
+
+	return rss.Serve(ttl)
+}
+
+// Stop to serve.
+func Stop() { stopServe <- struct{}{} }
+
+func (rss *RSS) latestItem() (latestItem *RSSItem) {
 	items := rss.Channel.Items
+	if len(items) < 1 {
+		return nil
+	}
 	latestItem = &items[0]
 	for i := 1; i < len(items); i++ {
 		if items[i].PubDate.After(latestItem.PubDate) {
