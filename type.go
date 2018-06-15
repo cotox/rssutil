@@ -425,7 +425,7 @@ type RSSTextInput struct {
 	Title string `xml:"title" json:"title"`
 
 	// Explains the text input area.
-	Description string `xml:"decsription" json:"decsription"`
+	Description string `xml:"description" json:"description"`
 
 	// The name of the text object in the text input area.
 	Name string `xml:"name" json:"name"`

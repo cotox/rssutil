@@ -2,7 +2,6 @@
 // Use of this source code is governed by a GPLv3
 // license that can be found in the LICENSE file.
 
-// Package rssutil ...
 package rssutil
 
 import (
@@ -17,7 +16,7 @@ import (
 
 var DefaultTTL = 20 * time.Minute
 
-// Feed create a RSS implementation from binary.
+// Feed creates RSS implementation from binary and return.
 func Feed(b []byte) (rss *RSS, err error) {
 	logTrace("feed()")
 
@@ -44,7 +43,7 @@ func Feed(b []byte) (rss *RSS, err error) {
 	return rss, nil
 }
 
-// FeedFromFile create a RSS implementation from specific file.
+// FeedFromFile creates RSS implementation from specific file and return.
 func FeedFromFile(filename string) (rss *RSS, err error) {
 	b, err := ioutil.ReadFile(filename)
 	if err != nil {
@@ -62,7 +61,7 @@ func FeedFromFile(filename string) (rss *RSS, err error) {
 	return rss, nil
 }
 
-// FeedFromURL create a RSS implementation from specific URL.
+// FeedFromURL creates RSS implementation from specific URL and return.
 func FeedFromURL(url string) (rss *RSS, err error) {
 	resp, err := http.Get(url)
 	if resp != nil {
